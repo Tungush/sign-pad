@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="robots" content="noindex">
+<title>Подпись</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1a1a1a);
+    --hint: var(--tg-theme-hint-color, #6b7280);
+    --btn: var(--tg-theme-button-color, #2563eb);
+    --btn-text: var(--tg-theme-button-text-color, #ffffff);
+    --line: var(--tg-theme-section-separator-color, #d1d5db);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
+  body { display: flex; flex-direction: column; padding: 16px; gap: 12px; }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  p { margin: 0; color: var(--hint); font-size: 14px; }
+  .pad { position: relative; width: 100%; aspect-ratio: 2 / 1; max-height: 60vh;
+    background: #ffffff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+  /* Линия, над которой расписываются, и подсказка, пока поле пустое */
+  .pad::after { content: ""; position: absolute; left: 8%; right: 8%; bottom: 22%; border-bottom: 1px dashed #c4c9d1; pointer-events: none; }
+  .ghost { position: absolute; left: 0; right: 0; bottom: 8%; text-align: center; color: #9ca3af; font-size: 13px; pointer-events: none; }
+  .row { display: flex; gap: 12px; }
+  button { flex: 1; min-height: 48px; border-radius: 12px; border: 1px solid var(--line); background: transparent;
+    color: var(--text); font: inherit; font-weight: 600; }
+  button.go { background: var(--btn); border-color: var(--btn); color: var(--btn-text); }
+  button:disabled { opacity: .45; }
+  #msg { min-height: 20px; }
+</style>
+</head>
+<body>
+  <h1>Подпись</h1>
+  <p>Распишитесь пальцем в белом поле и нажмите «Готово».</p>
+  <div class="pad">
+    <canvas id="c"></canvas>
+    <div class="ghost" id="ghost">распишитесь здесь</div>
+  </div>
+  <div class="row">
+    <button id="clear" type="button">Очистить</button>
+    <button id="done" type="button" class="go" disabled>Готово</button>
+  </div>
+  <p id="msg"></p>
+<script>
+(function () {
+  var W = 1000, H = 500;      // поле подписи в условных единицах
+  var LIMIT = 3900;           // запас до 4096 байт Telegram
+  var MIN_STEP = 4;           // точки ближе этого друг к другу не записываем
+  var MIN_POINTS = 8, MIN_LENGTH = 150;   // меньше — случайное касание
+  var D = '0123456789abcdefghijklmnopqrstuvwxyz';
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+  var done = document.getElementById('done'), msg = document.getElementById('msg'), ghost = document.getElementById('ghost');
+  var strokes = [], cur = null;
+
+  if (tg) { try { tg.ready(); tg.expand(); if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {} }
+
+  function fit() {
+    var r = canvas.getBoundingClientRect(), k = window.devicePixelRatio || 1;
+    canvas.width = Math.round(r.width * k); canvas.height = Math.round(r.height * k);
+    redraw();
+  }
+  function redraw() {
+    ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111827'; ctx.fillStyle = '#111827';
+    strokes.forEach(function (s) {
+      if (s.length === 1) { ctx.beginPath(); ctx.arc(s[0][0], s[0][1], 2.5, 0, 6.3); ctx.fill(); return; }
+      ctx.beginPath(); ctx.moveTo(s[0][0], s[0][1]);
+      for (var i = 1; i < s.length; i++) ctx.lineTo(s[i][0], s[i][1]);
+      ctx.stroke();
+    });
+  }
+  function at(e) {
+    var r = canvas.getBoundingClientRect();
+    return [Math.max(0, Math.min(W, Math.round((e.clientX - r.left) / r.width * W))),
+            Math.max(0, Math.min(H, Math.round((e.clientY - r.top) / r.height * H)))];
+  }
+  function measure() {
+    var points = 0, length = 0;
+    strokes.forEach(function (s) {
+      points += s.length;
+      for (var i = 1; i < s.length; i++) length += Math.hypot(s[i][0] - s[i - 1][0], s[i][1] - s[i - 1][1]);
+    });
+    return { points: points, length: length };
+  }
+  function refresh() {
+    var m = measure();
+    done.disabled = m.points < MIN_POINTS || m.length < MIN_LENGTH;
+    ghost.style.display = strokes.length ? 'none' : '';
+  }
+
+  canvas.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    cur = [at(e)]; strokes.push(cur); redraw(); refresh();
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!cur) return;
+    e.preventDefault();
+    var p = at(e), q = cur[cur.length - 1];
+    if (Math.hypot(p[0] - q[0], p[1] - q[1]) < MIN_STEP) return;
+    cur.push(p); redraw();
+  });
+  function up() { if (cur) { cur = null; refresh(); } }
+  canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
+  window.addEventListener('resize', fit);
+
+  document.getElementById('clear').addEventListener('click', function () { strokes = []; cur = null; msg.textContent = ''; redraw(); refresh(); });
+
+  function encode(list) {
+    return 'v1;' + list.map(function (s) {
+      return s.map(function (p) { return D[Math.floor(p[0] / 36)] + D[p[0] % 36] + D[Math.floor(p[1] / 36)] + D[p[1] % 36]; }).join('');
+    }).join(';');
+  }
+  // Длинную подпись прореживаем: убираем каждую вторую точку внутри линий,
+  // пока строка не уложится в предел Telegram. Концы линий не трогаем
+  function pack() {
+    var list = strokes, out = encode(list), guard = 0;
+    while (out.length > LIMIT && guard++ < 8) {
+      list = list.map(function (s) {
+        if (s.length < 4) return s;
+        return s.filter(function (_, i) { return i === 0 || i === s.length - 1 || i % 2 === 0; });
+      });
+      out = encode(list);
+    }
+    return out.length > LIMIT ? null : out;
+  }
+  window.signaturePack = pack;
+
+  done.addEventListener('click', function () {
+    var data = pack();
+    if (!data) { msg.textContent = 'Подпись слишком длинная. Нажмите «Очистить» и распишитесь короче.'; return; }
+    if (tg && tg.initData && tg.sendData) { done.disabled = true; tg.sendData(data); return; }
+    msg.textContent = 'Страница открыта не из Telegram — подпись не отправлена (' + data.length + ' байт).';
+  });
+
+  fit(); refresh();
+})();
+</script>
+</body>
+</html>
