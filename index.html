@@ -139,7 +139,7 @@
   done.addEventListener('click', function () {
     var data = pack();
     if (!data) { msg.textContent = 'Подпись слишком длинная. Нажмите «Очистить» и распишитесь короче.'; return; }
-    if (tg && tg.initData && tg.sendData) { done.disabled = true; tg.sendData(data); return; }
+    if (tg && tg.sendData && tg.platform && tg.platform !== 'unknown') { done.disabled = true; tg.sendData(data); return; }
     msg.textContent = 'Страница открыта не из Telegram — подпись не отправлена (' + data.length + ' байт).';
   });
 
